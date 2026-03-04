@@ -169,16 +169,7 @@ export default function App() {
     if (panelOpen) fetchSuggestions();
   }, [panelOpen, fetchSuggestions]);
 
-  // close panel on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setPanelOpen(false);
-      }
-    }
-    if (panelOpen) document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [panelOpen]);
+
 
   function toggleHero(hero: Hero) {
     setParty((prev) => {
@@ -254,7 +245,7 @@ export default function App() {
           );
         })}
         {party.length > 0 && (
-          <button className="clear-party-btn" onClick={() => { setParty([]); setPanelOpen(false); }}>
+          <button className="clear-party-btn" onClick={() => { setParty([]); }}>
             Clear
           </button>
         )}
@@ -358,7 +349,7 @@ export default function App() {
                       <div
                         key={i}
                         className="synergy-row"
-                        onClick={() => { toggleHero(hero!); setPanelOpen(false); }}
+                        onClick={() => { toggleHero(hero!); }}
                         style={{ cursor: "pointer" }}
                         title={`Add ${hero?.name} to party`}
                       >
