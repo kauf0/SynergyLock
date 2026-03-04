@@ -1,6 +1,6 @@
 # SynergyLock
 
-A lightweight always-on-top overlay for Deadlock that shows hero synergy stats. Easy to use, fun to play!
+A lightweight always-on-top overlay for Deadlock synergy picker that shows hero synergy stats. Easy to use, fun to play!
 
 ![screenshot of the app](demo/SynergyLock-Demo.png)
 
