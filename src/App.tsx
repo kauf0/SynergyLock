@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "./App.css";
 
 const API_BASE = "https://api.deadlock-api.com/v1";
 const ASSETS_BASE = "https://assets.deadlock-api.com/v2";
+
+const MAX_PARTY = 6;
 
 interface Hero {
   id: number;
@@ -10,7 +12,6 @@ interface Hero {
   images: { icon_hero_card: string };
 }
 
-// Response shape from /v1/analytics/hero-comb-stats
 interface HeroCombRaw {
   hero_ids: number[];
   wins: number;
@@ -18,7 +19,6 @@ interface HeroCombRaw {
   matches: number;
 }
 
-// Normalized shape we work with internally
 interface HeroComb {
   heroIds: number[];
   wins: number;
@@ -26,7 +26,6 @@ interface HeroComb {
   winrate: number;
 }
 
-// tier * 10 = min badge for that tier, tier * 10 + 6 = max badge
 const RANKS = [
   { label: "Obscurus",  tier: 0  },
   { label: "Initiate",  tier: 1  },
@@ -53,15 +52,63 @@ function winrateColor(wr: number): string {
   return "#f87171";
 }
 
+async function fetchCombs(
+  partyIds: number[],
+  combSize: number,
+  rankFrom: number,
+  rankTo: number
+): Promise<HeroCombRaw[]> {
+  const params = new URLSearchParams({
+    min_matches: "100",
+    min_average_badge: String(tierToBadge(RANKS[rankFrom].tier)),
+    max_average_badge: String(tierToBadge(RANKS[rankTo].tier, true)),
+    include_hero_ids: partyIds.join(","),
+    comb_size: String(combSize),
+  });
+  const res = await fetch(`${API_BASE}/analytics/hero-comb-stats?${params}`);
+  return res.json();
+}
+
+function mergeCombs(raw: HeroCombRaw[], partyIds: number[]): HeroComb[] {
+  const merged = new Map<string, HeroComb>();
+  for (const c of raw) {
+    if (!partyIds.every((id) => c.hero_ids.includes(id))) continue;
+    const key = [...c.hero_ids].sort((a, b) => a - b).join("-");
+    const existing = merged.get(key);
+    if (existing) {
+      existing.wins += c.wins;
+      existing.matches += c.matches;
+      existing.winrate = existing.wins / existing.matches;
+    } else {
+      merged.set(key, {
+        heroIds: c.hero_ids,
+        wins: c.wins,
+        matches: c.matches,
+        winrate: c.matches > 0 ? c.wins / c.matches : 0,
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
 export default function App() {
   const [heroes, setHeroes] = useState<Hero[]>([]);
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Hero | null>(null);
-  const [synergies, setSynergies] = useState<HeroComb[]>([]);
+  const [party, setParty] = useState<Hero[]>([]);
   const [rankFrom, setRankFrom] = useState(0);
   const [rankTo, setRankTo] = useState(RANKS.length - 1);
-  const [loading, setLoading] = useState(false);
+
+  // current party winrate
+  const [partyWr, setPartyWr] = useState<HeroComb | null>(null);
+  const [partyWrLoading, setPartyWrLoading] = useState(false);
+
+  // next pick suggestions
+  const [suggestions, setSuggestions] = useState<HeroComb[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+
   const [heroesLoading, setHeroesLoading] = useState(true);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${ASSETS_BASE}/heroes?only_active=true`)
@@ -71,54 +118,76 @@ export default function App() {
       .finally(() => setHeroesLoading(false));
   }, []);
 
-  const fetchSynergies = useCallback(async () => {
-    if (!selected) return;
-    setLoading(true);
-    setSynergies([]);
+  // fetch current party winrate whenever party or rank changes
+  const fetchPartyWr = useCallback(async () => {
+    if (party.length === 0) { setPartyWr(null); return; }
+    setPartyWrLoading(true);
+    setPartyWr(null);
     try {
-      const params = new URLSearchParams({
-        min_matches: "100",
-        min_average_badge: String(tierToBadge(RANKS[rankFrom].tier)),
-        max_average_badge: String(tierToBadge(RANKS[rankTo].tier, true)),
-        include_hero_ids: String(selected.id),
-        comb_size: "2",
-      });
-      const res = await fetch(`${API_BASE}/analytics/hero-comb-stats?${params}`);
-      const raw: HeroCombRaw[] = await res.json();
-
-      // API returns separate rows per badge subtier, so we merge duplicates
-      // by summing wins/matches and recalculating winrate
-      const merged = new Map<string, HeroComb>();
-      for (const c of raw) {
-        if (!c.hero_ids.includes(selected.id)) continue;
-        const key = [...c.hero_ids].sort((a, b) => a - b).join("-");
-        const existing = merged.get(key);
-        if (existing) {
-          existing.wins += c.wins;
-          existing.matches += c.matches;
-          existing.winrate = existing.wins / existing.matches;
-        } else {
-          merged.set(key, {
-            heroIds: c.hero_ids,
-            wins: c.wins,
-            matches: c.matches,
-            winrate: c.matches > 0 ? c.wins / c.matches : 0,
-          });
-        }
-      }
-
-      const result = [...merged.values()]
-        .sort((a, b) => b.winrate - a.winrate)
-        .slice(0, 15);
-      setSynergies(result);
+      const partyIds = party.map((h) => h.id);
+      const raw = await fetchCombs(partyIds, party.length, rankFrom, rankTo);
+      const combs = mergeCombs(raw, partyIds);
+      // pick the single comb that contains exactly the party (no extras)
+      const exact = combs.find(
+        (c) => c.heroIds.length === party.length &&
+          partyIds.every((id) => c.heroIds.includes(id))
+      ) ?? combs.sort((a, b) => b.matches - a.matches)[0] ?? null;
+      setPartyWr(exact);
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      setPartyWrLoading(false);
     }
-  }, [selected, rankFrom, rankTo]);
+  }, [party, rankFrom, rankTo]);
 
-  useEffect(() => { fetchSynergies(); }, [fetchSynergies]);
+  useEffect(() => { fetchPartyWr(); }, [fetchPartyWr]);
+
+  // fetch next pick suggestions when panel opens
+  const fetchSuggestions = useCallback(async () => {
+    if (party.length === 0 || party.length >= MAX_PARTY) {
+      setSuggestions([]);
+      return;
+    }
+    setSuggestLoading(true);
+    setSuggestions([]);
+    try {
+      const partyIds = party.map((h) => h.id);
+      const raw = await fetchCombs(partyIds, party.length + 1, rankFrom, rankTo);
+      const combs = mergeCombs(raw, partyIds)
+        .sort((a, b) => b.winrate - a.winrate)
+        .slice(0, 15);
+      setSuggestions(combs);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSuggestLoading(false);
+    }
+  }, [party, rankFrom, rankTo]);
+
+  // refetch suggestions when panel opens or party/rank changes while open
+  useEffect(() => {
+    if (panelOpen) fetchSuggestions();
+  }, [panelOpen, fetchSuggestions]);
+
+  // close panel on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setPanelOpen(false);
+      }
+    }
+    if (panelOpen) document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [panelOpen]);
+
+  function toggleHero(hero: Hero) {
+    setParty((prev) => {
+      const inParty = prev.find((h) => h.id === hero.id);
+      if (inParty) return prev.filter((h) => h.id !== hero.id);
+      if (prev.length >= MAX_PARTY) return prev;
+      return [...prev, hero];
+    });
+  }
 
   function handleRankFrom(idx: number) {
     setRankFrom(idx);
@@ -131,17 +200,18 @@ export default function App() {
   }
 
   const heroById = (id: number) => heroes.find((h) => h.id === id);
-  const partnerId = (c: HeroComb) => c.heroIds.find((id) => id !== selected?.id) ?? c.heroIds[0];
+  const suggestionId = (c: HeroComb) =>
+    c.heroIds.find((id) => !party.some((h) => h.id === id));
+
   const filteredHeroes = heroes.filter((h) =>
     h.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const rankLabel = rankFrom === rankTo
-    ? RANKS[rankFrom].label
-    : `${RANKS[rankFrom].label} – ${RANKS[rankTo].label}`;
+  const partyFull = party.length >= MAX_PARTY;
 
   return (
     <div className="app">
+      {/* Rank filter */}
       <div className="rank-range">
         <span className="rank-range-label">Rank</span>
         <select
@@ -165,6 +235,54 @@ export default function App() {
         </select>
       </div>
 
+      {/* Party slots */}
+      <div className="party-bar">
+        {Array.from({ length: MAX_PARTY }).map((_, i) => {
+          const hero = party[i];
+          return hero ? (
+            <button
+              key={i}
+              className="party-slot filled"
+              onClick={() => toggleHero(hero)}
+              title={`Remove ${hero.name}`}
+            >
+              <img src={hero.images?.icon_hero_card} alt={hero.name} />
+              <span className="party-slot-x">×</span>
+            </button>
+          ) : (
+            <div key={i} className="party-slot empty" />
+          );
+        })}
+        {party.length > 0 && (
+          <button className="clear-party-btn" onClick={() => { setParty([]); setPanelOpen(false); }}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Party winrate bar */}
+      {party.length > 0 && (
+        <div className="party-wr-bar">
+          {partyWrLoading ? (
+            <span className="party-wr-loading">calculating...</span>
+          ) : partyWr ? (
+            <>
+              <span className="party-wr-label">Party WR</span>
+              <span
+                className="party-wr-value"
+                style={{ color: winrateColor(partyWr.winrate) }}
+              >
+                {Math.round(partyWr.winrate * 100)}%
+              </span>
+              <span className="party-wr-matches">{partyWr.matches.toLocaleString()} matches</span>
+            </>
+          ) : (
+            <span className="party-wr-loading">no data for this combination</span>
+          )}
+        </div>
+      )}
+
+      {/* Search */}
       <div className="search-wrap">
         <input
           className="search-input"
@@ -178,18 +296,20 @@ export default function App() {
         )}
       </div>
 
-      {/* Hero grid - shown when nothing selected or while searching */}
-      {(!selected || search) && (
-        <div className="hero-grid-wrap">
-          {heroesLoading ? (
-            <div className="status-msg">Loading heroes...</div>
-          ) : (
-            <div className="hero-grid">
-              {filteredHeroes.map((hero) => (
+      {/* Hero grid */}
+      <div className="hero-grid-wrap">
+        {heroesLoading ? (
+          <div className="status-msg">Loading heroes...</div>
+        ) : (
+          <div className="hero-grid">
+            {filteredHeroes.map((hero) => {
+              const inParty = party.some((h) => h.id === hero.id);
+              const disabled = partyFull && !inParty;
+              return (
                 <button
                   key={hero.id}
-                  className={`hero-card ${selected?.id === hero.id ? "active" : ""}`}
-                  onClick={() => { setSelected(hero); setSearch(""); }}
+                  className={`hero-card ${inParty ? "active" : ""} ${disabled ? "disabled" : ""}`}
+                  onClick={() => !disabled && toggleHero(hero)}
                   title={hero.name}
                 >
                   {hero.images?.icon_hero_card
@@ -198,58 +318,67 @@ export default function App() {
                   }
                   <span className="hero-name">{hero.name}</span>
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Synergy panel */}
-      {selected && !search && (
-        <div className="synergy-panel">
-          <div className="selected-bar">
-            <button className="back-btn" onClick={() => setSelected(null)}>← Back</button>
-            {selected.images?.icon_hero_card && (
-              <img src={selected.images.icon_hero_card} alt={selected.name} className="selected-icon" />
-            )}
-            <span className="selected-name">{selected.name}</span>
-            <span className="selected-rank-label">{rankLabel}</span>
+              );
+            })}
           </div>
+        )}
+      </div>
 
-          <div className="table-head">
-            <span>Partner</span>
-            <span>Win Rate</span>
-            <span>Matches</span>
-          </div>
+      {/* Slide-up next pick panel */}
+      {party.length > 0 && !partyFull && (
+        <div ref={panelRef} className={`suggest-panel ${panelOpen ? "open" : ""}`}>
+          <button
+            className="suggest-toggle"
+            onClick={() => setPanelOpen((v) => !v)}
+          >
+            <span>Suggest next pick</span>
+            <span className={`suggest-arrow ${panelOpen ? "up" : ""}`}>▲</span>
+          </button>
 
-          {loading ? (
-            <div className="status-msg">Loading...</div>
-          ) : synergies.length === 0 ? (
-            <div className="status-msg">No data for this rank filter</div>
-          ) : (
-            <div className="synergy-list">
-              {synergies.map((comb, i) => {
-                const pid = partnerId(comb);
-                const partner = heroById(pid);
-                const wr = Math.round(comb.winrate * 100);
-                const color = winrateColor(comb.winrate);
-                return (
-                  <div key={i} className="synergy-row">
-                    <div className="partner-cell">
-                      <span className="row-num">#{i + 1}</span>
-                      {partner?.images?.icon_hero_card && (
-                        <img src={partner.images.icon_hero_card} alt="" className="partner-icon" />
-                      )}
-                      <span className="partner-name">{partner?.name ?? `Hero ${pid}`}</span>
-                    </div>
-                    <div className="wr-cell">
-                      <div className="wr-bar" style={{ width: `${wr}%`, background: color }} />
-                      <span style={{ color }}>{wr}%</span>
-                    </div>
-                    <span className="matches-cell">{comb.matches.toLocaleString()}</span>
-                  </div>
-                );
-              })}
+          {panelOpen && (
+            <div className="suggest-content">
+              <div className="table-head">
+                <span>Hero</span>
+                <span>Win Rate</span>
+                <span>Matches</span>
+              </div>
+              {suggestLoading ? (
+                <div className="status-msg">Loading...</div>
+              ) : suggestions.length === 0 ? (
+                <div className="status-msg">No data for this combination</div>
+              ) : (
+                <div className="synergy-list">
+                  {suggestions.map((comb, i) => {
+                    const sid = suggestionId(comb);
+                    if (!sid) return null;
+                    const hero = heroById(sid);
+                    const wr = Math.round(comb.winrate * 100);
+                    const color = winrateColor(comb.winrate);
+                    return (
+                      <div
+                        key={i}
+                        className="synergy-row"
+                        onClick={() => { toggleHero(hero!); setPanelOpen(false); }}
+                        style={{ cursor: "pointer" }}
+                        title={`Add ${hero?.name} to party`}
+                      >
+                        <div className="partner-cell">
+                          <span className="row-num">#{i + 1}</span>
+                          {hero?.images?.icon_hero_card && (
+                            <img src={hero.images.icon_hero_card} alt="" className="partner-icon" />
+                          )}
+                          <span className="partner-name">{hero?.name ?? `Hero ${sid}`}</span>
+                        </div>
+                        <div className="wr-cell">
+                          <div className="wr-bar" style={{ width: `${wr}%`, background: color }} />
+                          <span style={{ color }}>{wr}%</span>
+                        </div>
+                        <span className="matches-cell">{comb.matches.toLocaleString()}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
