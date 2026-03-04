@@ -85,13 +85,29 @@ export default function App() {
       });
       const res = await fetch(`${API_BASE}/analytics/hero-comb-stats?${params}`);
       const raw: HeroCombRaw[] = await res.json();
-      const result: HeroComb[] = raw
-        .map((c) => ({
-          heroIds: c.hero_ids,
-          wins: c.wins,
-          matches: c.matches,
-          winrate: c.matches > 0 ? c.wins / c.matches : 0,
-        }))
+
+      // API returns separate rows per badge subtier, so we merge duplicates
+      // by summing wins/matches and recalculating winrate
+      const merged = new Map<string, HeroComb>();
+      for (const c of raw) {
+        if (!c.hero_ids.includes(selected.id)) continue;
+        const key = [...c.hero_ids].sort((a, b) => a - b).join("-");
+        const existing = merged.get(key);
+        if (existing) {
+          existing.wins += c.wins;
+          existing.matches += c.matches;
+          existing.winrate = existing.wins / existing.matches;
+        } else {
+          merged.set(key, {
+            heroIds: c.hero_ids,
+            wins: c.wins,
+            matches: c.matches,
+            winrate: c.matches > 0 ? c.wins / c.matches : 0,
+          });
+        }
+      }
+
+      const result = [...merged.values()]
         .sort((a, b) => b.winrate - a.winrate)
         .slice(0, 15);
       setSynergies(result);
@@ -126,7 +142,6 @@ export default function App() {
 
   return (
     <div className="app">
-
       <div className="rank-range">
         <span className="rank-range-label">Rank</span>
         <select
