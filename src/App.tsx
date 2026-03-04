@@ -261,7 +261,7 @@ export default function App() {
       </div>
 
       {/* Party winrate bar */}
-      {party.length > 0 && (
+      {party.length >= 2 && (
         <div className="party-wr-bar">
           {partyWrLoading ? (
             <span className="party-wr-loading">calculating...</span>
