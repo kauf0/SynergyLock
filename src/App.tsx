@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import "./App.css";
 
-const API_BASE = "https://analytics.deadlock-api.com/v2";
+const API_BASE = "https://api.deadlock-api.com/v1";
 const ASSETS_BASE = "https://assets.deadlock-api.com/v2";
 
 interface Hero {
@@ -10,27 +10,38 @@ interface Hero {
   images: { icon_hero_card: string };
 }
 
-interface HeroComb {
-  hero_id1: number;
-  hero_id2: number;
+// Response shape from /v1/analytics/hero-comb-stats
+interface HeroCombRaw {
+  hero_ids: number[];
   wins: number;
   losses: number;
-  winrate: number;
   matches: number;
 }
 
+// Normalized shape we work with internally
+interface HeroComb {
+  heroIds: number[];
+  wins: number;
+  matches: number;
+  winrate: number;
+}
+
+// Badge = tier * 10 + subtier (0-6).
+// We filter by tier only so we use tier*10 as min and tier*10+6 as max.
 const RANKS = [
-  { label: "All Ranks", min: 0, max: 11 },
-  { label: "Seeker",    min: 0, max: 0 },
-  { label: "Alchemist", min: 1, max: 1 },
-  { label: "Arcanist",  min: 2, max: 2 },
-  { label: "Ritualist", min: 3, max: 3 },
-  { label: "Emissary",  min: 4, max: 4 },
-  { label: "Archon",    min: 5, max: 5 },
-  { label: "Oracle",    min: 6, max: 6 },
-  { label: "Phantom",   min: 7, max: 7 },
-  { label: "Ascendant", min: 8, max: 8 },
-  { label: "Eternus",   min: 9, max: 11 },
+  { label: "All Ranks", min: 0,   max: 116 },
+  { label: "Obscurus",  min: 0,   max: 6   },
+  { label: "Initiate",  min: 10,  max: 16  },
+  { label: "Seeker",    min: 20,  max: 26  },
+  { label: "Alchemist", min: 30,  max: 36  },
+  { label: "Arcanist",  min: 40,  max: 46  },
+  { label: "Ritualist", min: 50,  max: 56  },
+  { label: "Emissary",  min: 60,  max: 66  },
+  { label: "Archon",    min: 70,  max: 76  },
+  { label: "Oracle",    min: 80,  max: 86  },
+  { label: "Phantom",   min: 90,  max: 96  },
+  { label: "Ascendant", min: 100, max: 106 },
+  { label: "Eternus",   min: 110, max: 116 },
 ];
 
 function winrateColor(wr: number): string {
@@ -63,12 +74,22 @@ export default function App() {
     setSynergies([]);
     const rank = RANKS[rankIdx];
     try {
-      const res = await fetch(
-        `${API_BASE}/hero-combs?min_matches=100&min_rank=${rank.min}&max_rank=${rank.max}`
-      );
-      const data: HeroComb[] = await res.json();
-      const result = data
-        .filter((c) => c.hero_id1 === selected.id || c.hero_id2 === selected.id)
+      const params = new URLSearchParams({
+        min_matches: "100",
+        min_average_badge: String(rank.min),
+        max_average_badge: String(rank.max),
+        include_hero_ids: String(selected.id),
+        comb_size: "2",
+      });
+      const res = await fetch(`${API_BASE}/analytics/hero-comb-stats?${params}`);
+      const raw: HeroCombRaw[] = await res.json();
+      const result: HeroComb[] = raw
+        .map((c) => ({
+          heroIds: c.hero_ids,
+          wins: c.wins,
+          matches: c.matches,
+          winrate: c.matches > 0 ? c.wins / c.matches : 0,
+        }))
         .sort((a, b) => b.winrate - a.winrate)
         .slice(0, 15);
       setSynergies(result);
@@ -82,7 +103,7 @@ export default function App() {
   useEffect(() => { fetchSynergies(); }, [fetchSynergies]);
 
   const heroById = (id: number) => heroes.find((h) => h.id === id);
-  const partnerId = (c: HeroComb) => c.hero_id1 === selected?.id ? c.hero_id2 : c.hero_id1;
+  const partnerId = (c: HeroComb) => c.heroIds.find((id) => id !== selected?.id) ?? c.heroIds[0];
   const filteredHeroes = heroes.filter((h) =>
     h.name.toLowerCase().includes(search.toLowerCase())
   );
@@ -165,7 +186,8 @@ export default function App() {
           ) : (
             <div className="synergy-list">
               {synergies.map((comb, i) => {
-                const partner = heroById(partnerId(comb));
+                const pid = partnerId(comb);
+                const partner = heroById(pid);
                 const wr = Math.round(comb.winrate * 100);
                 const color = winrateColor(comb.winrate);
                 return (
@@ -175,7 +197,7 @@ export default function App() {
                       {partner?.images?.icon_hero_card && (
                         <img src={partner.images.icon_hero_card} alt="" className="partner-icon" />
                       )}
-                      <span className="partner-name">{partner?.name ?? `Hero ${partnerId(comb)}`}</span>
+                      <span className="partner-name">{partner?.name ?? `Hero ${pid}`}</span>
                     </div>
                     <div className="wr-cell">
                       <div className="wr-bar" style={{ width: `${wr}%`, background: color }} />
