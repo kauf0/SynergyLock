@@ -44,3 +44,7 @@ npm run tauri dev
 ## Where does the data come from?
 
 All stats are fetched from [deadlock-api.com](https://deadlock-api.com).
+
+## License
+
+MIT
