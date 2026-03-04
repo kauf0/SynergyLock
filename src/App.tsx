@@ -26,23 +26,25 @@ interface HeroComb {
   winrate: number;
 }
 
-// Badge = tier * 10 + subtier (0-6).
-// We filter by tier only so we use tier*10 as min and tier*10+6 as max.
+// tier * 10 = min badge for that tier, tier * 10 + 6 = max badge
 const RANKS = [
-  { label: "All Ranks", min: 0,   max: 116 },
-  { label: "Obscurus",  min: 0,   max: 6   },
-  { label: "Initiate",  min: 10,  max: 16  },
-  { label: "Seeker",    min: 20,  max: 26  },
-  { label: "Alchemist", min: 30,  max: 36  },
-  { label: "Arcanist",  min: 40,  max: 46  },
-  { label: "Ritualist", min: 50,  max: 56  },
-  { label: "Emissary",  min: 60,  max: 66  },
-  { label: "Archon",    min: 70,  max: 76  },
-  { label: "Oracle",    min: 80,  max: 86  },
-  { label: "Phantom",   min: 90,  max: 96  },
-  { label: "Ascendant", min: 100, max: 106 },
-  { label: "Eternus",   min: 110, max: 116 },
+  { label: "Obscurus",  tier: 0  },
+  { label: "Initiate",  tier: 1  },
+  { label: "Seeker",    tier: 2  },
+  { label: "Alchemist", tier: 3  },
+  { label: "Arcanist",  tier: 4  },
+  { label: "Ritualist", tier: 5  },
+  { label: "Emissary",  tier: 6  },
+  { label: "Archon",    tier: 7  },
+  { label: "Oracle",    tier: 8  },
+  { label: "Phantom",   tier: 9  },
+  { label: "Ascendant", tier: 10 },
+  { label: "Eternus",   tier: 11 },
 ];
+
+function tierToBadge(tier: number, end = false): number {
+  return end ? tier * 10 + 6 : tier * 10;
+}
 
 function winrateColor(wr: number): string {
   if (wr >= 0.58) return "#4ade80";
@@ -56,7 +58,8 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Hero | null>(null);
   const [synergies, setSynergies] = useState<HeroComb[]>([]);
-  const [rankIdx, setRankIdx] = useState(0);
+  const [rankFrom, setRankFrom] = useState(0);
+  const [rankTo, setRankTo] = useState(RANKS.length - 1);
   const [loading, setLoading] = useState(false);
   const [heroesLoading, setHeroesLoading] = useState(true);
 
@@ -72,12 +75,11 @@ export default function App() {
     if (!selected) return;
     setLoading(true);
     setSynergies([]);
-    const rank = RANKS[rankIdx];
     try {
       const params = new URLSearchParams({
         min_matches: "100",
-        min_average_badge: String(rank.min),
-        max_average_badge: String(rank.max),
+        min_average_badge: String(tierToBadge(RANKS[rankFrom].tier)),
+        max_average_badge: String(tierToBadge(RANKS[rankTo].tier, true)),
         include_hero_ids: String(selected.id),
         comb_size: "2",
       });
@@ -98,9 +100,19 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [selected, rankIdx]);
+  }, [selected, rankFrom, rankTo]);
 
   useEffect(() => { fetchSynergies(); }, [fetchSynergies]);
+
+  function handleRankFrom(idx: number) {
+    setRankFrom(idx);
+    if (idx > rankTo) setRankTo(idx);
+  }
+
+  function handleRankTo(idx: number) {
+    setRankTo(idx);
+    if (idx < rankFrom) setRankFrom(idx);
+  }
 
   const heroById = (id: number) => heroes.find((h) => h.id === id);
   const partnerId = (c: HeroComb) => c.heroIds.find((id) => id !== selected?.id) ?? c.heroIds[0];
@@ -108,14 +120,29 @@ export default function App() {
     h.name.toLowerCase().includes(search.toLowerCase())
   );
 
+  const rankLabel = rankFrom === rankTo
+    ? RANKS[rankFrom].label
+    : `${RANKS[rankFrom].label} – ${RANKS[rankTo].label}`;
+
   return (
     <div className="app">
-      <div className="header">
-        <span className="header-title">Deadlock Synergy</span>
+
+      <div className="rank-range">
+        <span className="rank-range-label">Rank</span>
         <select
           className="rank-select"
-          value={rankIdx}
-          onChange={(e) => setRankIdx(Number(e.target.value))}
+          value={rankFrom}
+          onChange={(e) => handleRankFrom(Number(e.target.value))}
+        >
+          {RANKS.map((r, i) => (
+            <option key={i} value={i}>{r.label}</option>
+          ))}
+        </select>
+        <span className="rank-range-sep">–</span>
+        <select
+          className="rank-select"
+          value={rankTo}
+          onChange={(e) => handleRankTo(Number(e.target.value))}
         >
           {RANKS.map((r, i) => (
             <option key={i} value={i}>{r.label}</option>
@@ -171,6 +198,7 @@ export default function App() {
               <img src={selected.images.icon_hero_card} alt={selected.name} className="selected-icon" />
             )}
             <span className="selected-name">{selected.name}</span>
+            <span className="selected-rank-label">{rankLabel}</span>
           </div>
 
           <div className="table-head">
