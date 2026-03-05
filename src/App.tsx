@@ -57,7 +57,7 @@ function winrateColor(wr: number): string {
 async function apiFetch(path: string, retries = 2): Promise<Response> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
     const res = await fetch(`${API_DIRECT}${path}`, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) throw new Error(`status ${res.status}`);
