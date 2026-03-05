@@ -125,6 +125,7 @@ export default function App() {
     setPartyWr(null);
     try {
       const partyIds = party.map((h) => h.id);
+      if (party.length < 2) { setPartyWr(null); return; }
       const raw = await fetchCombs(partyIds, party.length, rankFrom, rankTo);
       const combs = mergeCombs(raw, partyIds);
       // pick the single comb that contains exactly the party (no extras)
@@ -168,8 +169,6 @@ export default function App() {
   useEffect(() => {
     if (panelOpen) fetchSuggestions();
   }, [panelOpen, fetchSuggestions]);
-
-
 
   function toggleHero(hero: Hero) {
     setParty((prev) => {
