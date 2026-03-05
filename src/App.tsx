@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import "./App.css";
 
-const API_BASE = "https://api.deadlock-api.com/v1";
+const API_DIRECT = "https://api.deadlock-api.com/v1";
+const API_PROXY = "https://api.pilgrim-realm.ru:8443/v1";
 const ASSETS_BASE = "https://assets.deadlock-api.com/v2";
+const TIMEOUT_MS = 2200;
 
 const MAX_PARTY = 6;
 
@@ -52,6 +54,29 @@ function winrateColor(wr: number): string {
   return "#f87171";
 }
 
+async function apiFetch(path: string, retries = 2): Promise<Response> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${API_DIRECT}${path}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    return res;
+  } catch {
+    try {
+      const res = await fetch(`${API_PROXY}${path}`);
+      if (!res.ok) throw new Error(`proxy status ${res.status}`);
+      return res;
+    } catch {
+      if (retries > 0) {
+        await new Promise((r) => setTimeout(r, 1000));
+        return apiFetch(path, retries - 1);
+      }
+      throw new Error("all retries failed");
+    }
+  }
+}
+
 async function fetchCombs(
   partyIds: number[],
   combSize: number,
@@ -65,7 +90,7 @@ async function fetchCombs(
     include_hero_ids: partyIds.join(","),
     comb_size: String(combSize),
   });
-  const res = await fetch(`${API_BASE}/analytics/hero-comb-stats?${params}`);
+  const res = await apiFetch(`/analytics/hero-comb-stats?${params}`);
   return res.json();
 }
 
@@ -98,11 +123,9 @@ export default function App() {
   const [rankFrom, setRankFrom] = useState(0);
   const [rankTo, setRankTo] = useState(RANKS.length - 1);
 
-  // current party winrate
   const [partyWr, setPartyWr] = useState<HeroComb | null>(null);
   const [partyWrLoading, setPartyWrLoading] = useState(false);
 
-  // next pick suggestions
   const [suggestions, setSuggestions] = useState<HeroComb[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -118,17 +141,14 @@ export default function App() {
       .finally(() => setHeroesLoading(false));
   }, []);
 
-  // fetch current party winrate whenever party or rank changes
   const fetchPartyWr = useCallback(async () => {
-    if (party.length === 0) { setPartyWr(null); return; }
+    if (party.length < 2) { setPartyWr(null); return; }
     setPartyWrLoading(true);
     setPartyWr(null);
     try {
       const partyIds = party.map((h) => h.id);
-      if (party.length < 2) { setPartyWr(null); return; }
       const raw = await fetchCombs(partyIds, party.length, rankFrom, rankTo);
       const combs = mergeCombs(raw, partyIds);
-      // pick the single comb that contains exactly the party (no extras)
       const exact = combs.find(
         (c) => c.heroIds.length === party.length &&
           partyIds.every((id) => c.heroIds.includes(id))
@@ -143,7 +163,6 @@ export default function App() {
 
   useEffect(() => { fetchPartyWr(); }, [fetchPartyWr]);
 
-  // fetch next pick suggestions when panel opens
   const fetchSuggestions = useCallback(async () => {
     if (party.length === 0 || party.length >= MAX_PARTY) {
       setSuggestions([]);
@@ -165,7 +184,6 @@ export default function App() {
     }
   }, [party, rankFrom, rankTo]);
 
-  // refetch suggestions when panel opens or party/rank changes while open
   useEffect(() => {
     if (panelOpen) fetchSuggestions();
   }, [panelOpen, fetchSuggestions]);
@@ -201,7 +219,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* Rank filter */}
       <div className="rank-range">
         <span className="rank-range-label">Rank</span>
         <select
@@ -225,7 +242,6 @@ export default function App() {
         </select>
       </div>
 
-      {/* Party slots */}
       <div className="party-bar">
         {Array.from({ length: MAX_PARTY }).map((_, i) => {
           const hero = party[i];
@@ -244,13 +260,12 @@ export default function App() {
           );
         })}
         {party.length > 0 && (
-          <button className="clear-party-btn" onClick={() => { setParty([]); }}>
+          <button className="clear-party-btn" onClick={() => setParty([])}>
             Clear
           </button>
         )}
       </div>
 
-      {/* Party winrate bar */}
       {party.length >= 2 && (
         <div className="party-wr-bar">
           {partyWrLoading ? (
@@ -272,7 +287,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Search */}
       <div className="search-wrap">
         <input
           className="search-input"
@@ -286,7 +300,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Hero grid */}
       <div className="hero-grid-wrap">
         {heroesLoading ? (
           <div className="status-msg">Loading heroes...</div>
@@ -314,7 +327,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Slide-up next pick panel */}
       {party.length > 0 && !partyFull && (
         <div ref={panelRef} className={`suggest-panel ${panelOpen ? "open" : ""}`}>
           <button
@@ -348,7 +360,7 @@ export default function App() {
                       <div
                         key={i}
                         className="synergy-row"
-                        onClick={() => { toggleHero(hero!); }}
+                        onClick={() => toggleHero(hero!)}
                         style={{ cursor: "pointer" }}
                         title={`Add ${hero?.name} to party`}
                       >
